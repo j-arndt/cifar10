@@ -25,14 +25,15 @@ class FitnessResult:
 
 def _worker(queue: mp.Queue, binding_path: Optional[str], config: dict):
     """Runs inside subprocess — full VRAM isolation from agent."""
+    import os
+    # MUST set CUDA before any tinygrad import — tinygrad selects device at import time
+    os.environ.setdefault("CUDA", "1")
     try:
         import time
-        import torch
         from cifar10.skeleton import run_skeleton
 
         t0 = time.perf_counter()
 
-        # Apply the pytorch_binding if provided
         apply_fn = None
         if binding_path and Path(binding_path).exists():
             try:
@@ -51,7 +52,8 @@ def _worker(queue: mp.Queue, binding_path: Optional[str], config: dict):
             "error":       None,
         })
     except Exception as e:
-        queue.put({"accuracy": 0.0, "wall_time_s": 9999.0, "error": str(e)})
+        import traceback
+        queue.put({"accuracy": 0.0, "wall_time_s": 9999.0, "error": traceback.format_exc()[-500:]})
 
 
 def run_cifar(kernel_proposal=None, config: dict | None = None) -> FitnessResult:

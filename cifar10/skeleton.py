@@ -49,7 +49,6 @@ def run_skeleton(config: dict | None = None, apply_fn=None) -> dict:
         'BS':           config.get('batch_size', 512),
         'STEPS':        config.get('steps', 1000),
         'EMA':          config.get('ema', 1),
-        'CUDA':         '1',
         'SYNCBN':       '0',
         'RANDOM_CROP':  '1',
         'RANDOM_FLIP':  '1',
