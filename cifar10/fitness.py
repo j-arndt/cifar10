@@ -25,11 +25,11 @@ class FitnessResult:
 
 def _worker(queue: mp.Queue, binding_path: Optional[str], config: dict):
     """Runs inside subprocess — full VRAM isolation from agent."""
-    import time
-    import torch
-    from cifar10.skeleton import run_skeleton
-
     try:
+        import time
+        import torch
+        from cifar10.skeleton import run_skeleton
+
         t0 = time.perf_counter()
 
         # Apply the pytorch_binding if provided
