@@ -16,34 +16,38 @@ from cifar10.firewall import validate
 
 
 SCHEMA_JSON = json.dumps({
-    "kernel_type":          "conv_bn_relu_fusion | depthwise_conv | optimizer_fusion | data_pipeline",
-    "layer_target":         "layer1.0  (max 50 chars)",
+    "kernel_type":          "compile_fusion | hyp_tuning | arch_change | data_pipeline",
+    "layer_target":         "SpeedyConvNet or conv_group_1/2/3 or linear (max 50 chars)",
     "cuda_kernel_code":     "// leave as comment if not writing raw CUDA C++",
-    "pytorch_binding":      "def apply(model, config):\n    import torch\n    return torch.compile(model, mode='max-autotune')",
-    "integration_patch":    "model = apply(model, config)",
-    "rationale":            "Why this reduces wall time  (max 1000 chars)",
+    "pytorch_binding":      "def apply(net, hyp):\n    import torch\n    net = torch.compile(net, mode='max-autotune')\n    return net, hyp",
+    "integration_patch":    "net, hyp = apply(net, hyp)",
+    "rationale":            "Why this reduces wall time below 10s (max 1000 chars)",
     "expected_speedup_pct": 25,
 }, indent=2)
 
 
 EXAMPLE_BINDING = '''
-# EXAMPLE 1 - cudagraphs (NO C compiler needed, works on Windows right now):
-def apply(model, config):
+# EXAMPLE 1 - torch.compile max-autotune (gcc available in WSL2, this works):
+def apply(net, hyp):
     import torch
     torch.set_float32_matmul_precision('high')
-    return torch.compile(model, backend="cudagraphs")
+    net = torch.compile(net, mode='max-autotune')
+    return net, hyp
 
-# EXAMPLE 2 - channels_last + cudagraphs (best combo, no compiler needed):
-def apply(model, config):
+# EXAMPLE 2 - compile + larger batch (fill tensor cores better):
+def apply(net, hyp):
     import torch
     torch.set_float32_matmul_precision('high')
-    model = model.to(memory_format=torch.channels_last)
-    return torch.compile(model, backend="cudagraphs")
+    hyp['opt']['non_bias_lr'] *= 2.0   # scale LR with batch
+    hyp['opt']['bias_lr']     *= 2.0
+    net = torch.compile(net, mode='reduce-overhead')
+    return net, hyp
 
-# EXAMPLE 3 - channels_last only (zero compilation, pure memory layout win):
-def apply(model, config):
+# EXAMPLE 3 - cudagraphs (fastest kernel launch, lowest latency):
+def apply(net, hyp):
     import torch
-    return model.to(memory_format=torch.channels_last)
+    net = torch.compile(net, backend='cudagraphs')
+    return net, hyp
 '''
 
 
@@ -53,49 +57,60 @@ def build_system_prompt(config: dict, skeleton_code: str, champion_info: str) ->
     target_acc = config.get("target_accuracy", 0.940)
 
     return f"""\
-You are the MOAB CIFAR-10 Crucible kernel optimization agent.
+You are the MOAB hlb-cifar10 Crucible optimization agent.
 
 ## HARDWARE
-- GPU: RTX 4060 Mobile (Ada Lovelace)
-- CUDA arch: {arch}
+- GPU: RTX 4060 Mobile (Ada Lovelace, sm_89)
 - VRAM: 8 GB GDDR6, 272 GB/s bandwidth, 33 TFLOPS FP16
-- PyTorch 2.6 with torch.compile + Triton 3.1.0 (fully functional, all modes available)
-- MSVC (cl.exe) NOT available — do not write raw CUDA C++ kernels
-- SAFE compile modes: mode='default', 'reduce-overhead', or 'max-autotune' (all work)
+- PyTorch 2.6 + Triton 3.2 + gcc (WSL2) — ALL compile modes available including max-autotune
 
 ## MISSION
-Train ResNet-9 on CIFAR-10 to >= {target_acc} accuracy in < {target_t} second(s) wall clock.
+Optimize hlb-cifar10 (SpeedyConvNet) training on CIFAR-10:
+- Target: >= {target_acc} accuracy AND < {target_t}s wall time
+- Baseline: ~20-25s on this GPU. You must cut it to < {target_t}s.
 
 ## CURRENT STATUS
 {champion_info}
 
-## YOUR BINDING CONTRACT
-Your `pytorch_binding` MUST define a function:
-```python
-def apply(model, config):
-    # transform the model here
-    return model  # MUST return the model
-```
-This function receives the ResNet-9 model and config dict, transforms it, and returns it.
-It is called before training starts. The model is already on CUDA.
+## THE SKELETON YOU ARE OPTIMIZING
+The skeleton trains SpeedyConvNet (hlb-cifar10):
+- Data is ALREADY on GPU as FP16 tensors (no CPU DataLoader bottleneck)
+- Architecture: whitening conv → 3x ConvGroup (MaxPool+Conv+BN+GELU) → FastGlobalMaxPool → Linear
+- Channels_last already applied at model creation
+- EMA weights used for final accuracy measurement
+- OneCycleLR with SGD (separate bias/non-bias optimizers)
+- train_epochs=12.1, batchsize=1024
 
-## WORKING EXAMPLES (start with these)
+## YOUR BINDING CONTRACT
+Your `pytorch_binding` MUST define:
+```python
+def apply(net, hyp):
+    # net = SpeedyConvNet (already on CUDA, FP16, channels_last)
+    # hyp = dict with keys: opt, net, misc
+    # Modify net and/or hyp to go faster
+    return net, hyp  # MUST return both
+```
+
+## WORKING EXAMPLES
 {EXAMPLE_BINDING}
 
 ## OUTPUT FORMAT — ONLY valid JSON, start with {{, end with }}
 {SCHEMA_JSON}
 
-## OPTIMIZATION STRATEGY (priority order — cudagraphs works NOW, no C compiler needed)
-1. `torch.compile(model, backend='cudagraphs')` — captures the CUDA graph, eliminates kernel launch overhead, NO C compiler needed
-2. `model.to(memory_format=torch.channels_last)` — NCHW→NHWC layout, better conv throughput, zero compilation
-3. Combine channels_last + cudagraphs — best immediate win
-4. `torch.set_float32_matmul_precision('high')` — free TF32 speedup on Ada Lovelace
-5. mode='max-autotune' needs gcc/cl.exe — skip unless you know C compiler is available
+## OPTIMIZATION LEVERS (best ROI first)
+1. `torch.compile(net, mode='max-autotune')` — Triton kernel fusion, biggest speedup, gcc is available
+2. `torch.compile(net, mode='reduce-overhead')` — CUDA graph capture, low-latency per-step
+3. `torch.compile(net, backend='cudagraphs')` — alternative graph capture
+4. `torch.set_float32_matmul_precision('high')` — TF32 on Ada, free speedup
+5. Modify `hyp['misc']['train_epochs']` (e.g., 10.0) — fewer epochs if accuracy still holds
+6. Increase `batchsize` via `hyp` to saturate tensor cores (careful: LR must scale)
+7. `torch.backends.cudnn.benchmark = True` — auto-tune conv algorithms
 
 ## RULES
-- pytorch_binding MUST define `apply(model, config)` returning the model
-- No `os.`, `subprocess.`, `socket.`, `open(`, `eval(`, `exec(`, `__import__`
-- cuda_kernel_code: set to `// not used` if writing Python-only optimization
+- apply() MUST return (net, hyp) tuple — not just net
+- Do NOT call `fuse_modules` (removed in PyTorch 2.x)
+- Do NOT import packages not in PyTorch standard library
+- cuda_kernel_code: set to `// not used` for Python-only optimizations
 - Output ONLY the JSON. No prose. No markdown fences.
 """
 
