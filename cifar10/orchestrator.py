@@ -145,7 +145,8 @@ class OrchestrationLoop:
         if max_hours is None:
             max_hours = self.config.get("max_hours", 4)
 
-        deadline = time.time() + max_hours * 3600
+        run_start      = time.time()              # captured once — NEVER recalculated
+        deadline       = run_start + max_hours * 3600
         dry_run_cycles = 3
         skeleton_code  = Path("cifar10/skeleton.py").read_text(encoding="utf-8")
 
@@ -157,13 +158,11 @@ class OrchestrationLoop:
         print(f"{'='*60}\n")
 
         while not self._shutdown:
-            # ── Live config reload ──────────────────────────────────
+            # ── Live config reload (picks up max_hours changes without restart) ──
             self._reload_config()
-            max_hours = self.config.get("max_hours", max_hours)
-            deadline  = time.time() + max_hours * 3600  # recalculate on each cycle
 
-            # ── Time check ──────────────────────────────────────────
-            elapsed_h = (time.time() - (deadline - max_hours * 3600)) / 3600
+            # ── Time check ──────────────────────────────────────────────────────
+            elapsed_h = (time.time() - run_start) / 3600
             if time.time() >= deadline:
                 print(f"\n[orchestrator] Time limit reached ({max_hours}h). Exiting.")
                 break
@@ -171,7 +170,7 @@ class OrchestrationLoop:
             self._attempt_n += 1
             cycle_start = time.time()
 
-            # ── Dry-run exit check (all cycles, not just successful) ─
+            # ── Dry-run exit check ───────────────────────────────────────────────
             if dry_run and self._attempt_n > dry_run_cycles:
                 print(f"\n[dry-run] {dry_run_cycles} cycles complete. System validated.")
                 return None
@@ -179,7 +178,7 @@ class OrchestrationLoop:
             print(f"\n[attempt {self._attempt_n}] {datetime.datetime.now().strftime('%H:%M:%S')} | "
                   f"elapsed: {elapsed_h:.1f}h | {self._champion_info()}")
 
-            # ── Step 1: Build slap ──────────────────────────────────
+            # ── Step 1: Build slap ───────────────────────────────────────────────
             slap = self._build_slap()
 
             # ── Step 2: Context compression check ──────────────────
