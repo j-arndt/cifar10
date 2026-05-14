@@ -72,7 +72,8 @@ def run_cifar(kernel_proposal=None, config: dict | None = None) -> FitnessResult
     proc  = mp.Process(
         target=_worker,
         args=(queue, binding_path, config),
-        daemon=True,
+        # NOTE: daemon=False — torch.compile/Triton spawn child processes internally;
+        # daemon processes cannot have children. Cleanup handled by join+kill below.
     )
     proc.start()
     proc.join(timeout=600)  # 10-minute hard ceiling
