@@ -27,20 +27,20 @@ SCHEMA_JSON = json.dumps({
 
 
 EXAMPLE_BINDING = '''
-# EXAMPLE 1 - torch.compile max-autotune:
+# EXAMPLE 1 - torch.compile default (WORKS on Windows, no Triton needed):
 def apply(model, config):
     import torch
-    return torch.compile(model, mode="max-autotune")
+    return torch.compile(model, mode="default")
 
-# EXAMPLE 2 - channels_last + compile:
+# EXAMPLE 2 - reduce-overhead (slightly more aggressive, still no Triton):
+def apply(model, config):
+    import torch
+    return torch.compile(model, mode="reduce-overhead")
+
+# EXAMPLE 3 - channels_last memory layout + compile (best combo):
 def apply(model, config):
     import torch
     model = model.to(memory_format=torch.channels_last)
-    return torch.compile(model, mode="max-autotune")
-
-# EXAMPLE 3 - reduce-overhead (faster compile, less optimal):
-def apply(model, config):
-    import torch
     return torch.compile(model, mode="reduce-overhead")
 '''
 
@@ -57,8 +57,10 @@ You are the MOAB CIFAR-10 Crucible kernel optimization agent.
 - GPU: RTX 4060 Mobile (Ada Lovelace)
 - CUDA arch: {arch}
 - VRAM: 8 GB GDDR6, 272 GB/s bandwidth, 33 TFLOPS FP16
-- PyTorch 2.6 with torch.compile (Triton backend) available
+- PyTorch 2.6 with torch.compile available (Inductor backend, NO Triton on Windows)
 - MSVC (cl.exe) NOT available — do not write raw CUDA C++ kernels
+- DO NOT use mode='max-autotune' — it requires Triton which is NOT installed
+- SAFE compile modes: mode='default' or mode='reduce-overhead'
 
 ## MISSION
 Train ResNet-9 on CIFAR-10 to >= {target_acc} accuracy in < {target_t} second(s) wall clock.

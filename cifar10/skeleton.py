@@ -19,7 +19,7 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, cutout, device)
         x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
         x = cutout(x)
         optimizer.zero_grad(set_to_none=True)
-        with torch.cuda.amp.autocast():
+        with torch.amp.autocast('cuda'):
             out  = model(x)
             loss = nn.functional.cross_entropy(out, y)
         scaler.scale(loss).backward()
@@ -38,7 +38,7 @@ def evaluate(model, loader, device):
     correct = total = 0
     for x, y in loader:
         x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
-        with torch.cuda.amp.autocast():
+        with torch.amp.autocast('cuda'):
             out = model(x)
         correct += (out.argmax(1) == y).sum().item()
         total   += y.size(0)
@@ -62,6 +62,9 @@ def run_skeleton(config: dict | None = None, apply_fn=None) -> dict:
     # ── Apply agent's pytorch_binding (torch.compile, fused ops, etc.) ──
     if apply_fn is not None:
         try:
+            # Suppress Triton/dynamo errors — falls back to eager if compile fails
+            import torch._dynamo
+            torch._dynamo.config.suppress_errors = True
             model = apply_fn(model, config)
             print("[skeleton] pytorch_binding applied successfully")
         except Exception as e:
