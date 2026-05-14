@@ -28,6 +28,18 @@ def _worker(queue: mp.Queue, binding_path: Optional[str], config: dict):
     import os
     # MUST set CUDA before any tinygrad import — tinygrad selects device at import time
     os.environ.setdefault("CUDA", "1")
+
+    # WSL2 fix: pre-load the real CUDA driver library (not the stub).
+    # /lib/x86_64-linux-gnu/libcuda.so is a stub that returns CUDA_ERROR_NO_DEVICE.
+    # /usr/lib/wsl/lib/libcuda.so.1 is the real WSL2 CUDA driver — cuInit(0) succeeds.
+    import ctypes, glob
+    _wsl_cuda = "/usr/lib/wsl/lib/libcuda.so.1"
+    if os.path.exists(_wsl_cuda):
+        try:
+            ctypes.CDLL(_wsl_cuda, mode=ctypes.RTLD_GLOBAL)
+        except Exception:
+            pass
+
     try:
         import time
         from cifar10.skeleton import run_skeleton
