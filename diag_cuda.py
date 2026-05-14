@@ -1,19 +1,24 @@
-import subprocess, os
+import subprocess
+# Find out what libcuda.so tinygrad is about to load
+import ctypes.util
+cuda_lib = ctypes.util.find_library('cuda')
+print("ctypes finds libcuda at:", cuda_lib)
 
-# Check libcuda.so locations
-r = subprocess.run(['ldconfig', '-p'], capture_output=True, text=True)
-for line in r.stdout.split('\n'):
-    if 'libcuda' in line:
-        print("ldconfig:", line.strip())
+# Check the actual file
+import subprocess
+r = subprocess.run(['ldd', '/lib/x86_64-linux-gnu/libcuda.so'], capture_output=True, text=True)
+print("ldd libcuda.so:", r.stdout[:500])
 
-# Check WSL lib
-for f in ['/usr/lib/wsl/lib/libcuda.so.1', '/usr/lib/wsl/lib/libcuda.so']:
-    print(f"WSL lib {f}:", os.path.exists(f))
+# Check the wsl version
+r2 = subprocess.run(['ldd', '/usr/lib/wsl/lib/libcuda.so.1'], capture_output=True, text=True)
+print("ldd wsl libcuda.so.1:", r2.stdout[:200])
 
-# Check where tinygrad tries to load from
-import tinygrad.runtime.ops_cuda as ops
-import inspect
-src = inspect.getsource(ops)
-for line in src.split('\n'):
-    if 'libcuda' in line.lower() or 'ctypes' in line.lower() and 'cuda' in line.lower():
-        print("tinygrad loading:", line.strip())
+# try patching ctypes to load the WSL version
+import ctypes
+try:
+    cuda_wsl = ctypes.CDLL('/usr/lib/wsl/lib/libcuda.so.1')
+    result = ctypes.c_int(-1)
+    cuda_wsl.cuInit(0)
+    print("cuInit with WSL lib: SUCCESS")
+except Exception as e:
+    print("cuInit with WSL lib:", e)
