@@ -280,6 +280,8 @@ class OrchestrationLoop:
             print(f"[orchestrator] Result: acc={fitness_result.accuracy:.4f} "
                   f"time={fitness_result.wall_time_s:.3f}s "
                   f"{'PASS' if fitness_result.passed else 'fail'}")
+            if fitness_result.error:
+                print(f"[orchestrator] Fitness error: {fitness_result.error[:300]}")
 
             # ── Step 7: Log ─────────────────────────────────────────
             record = AttemptRecord(

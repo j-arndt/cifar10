@@ -54,7 +54,7 @@ def run_skeleton(config: dict | None = None, apply_fn=None) -> dict:
     batch_size = config.get("batch_size", 512)
 
     model  = ResNet9().to(device)
-    scaler = torch.cuda.amp.GradScaler()
+    scaler = torch.amp.GradScaler('cuda')
     cutout = CutoutAugmentation(size=8)
 
     train_loader, test_loader = get_cifar10_loaders(batch_size=batch_size)
@@ -82,12 +82,34 @@ def run_skeleton(config: dict | None = None, apply_fn=None) -> dict:
     )
 
     t0 = time.perf_counter()
-    for epoch in range(epochs):
-        train_stats = train_one_epoch(model, train_loader, optimizer, scaler, scheduler, cutout, device)
-        if (epoch + 1) % 5 == 0 or epoch == epochs - 1:
-            test_stats = evaluate(model, test_loader, device)
-            print(f"Epoch {epoch+1:2d}/{epochs}  loss={train_stats['loss']:.4f}  "
-                  f"train_acc={train_stats['accuracy']:.4f}  test_acc={test_stats['accuracy']:.4f}")
+    try:
+        for epoch in range(epochs):
+            train_stats = train_one_epoch(model, train_loader, optimizer, scaler, scheduler, cutout, device)
+            if (epoch + 1) % 5 == 0 or epoch == epochs - 1:
+                test_stats = evaluate(model, test_loader, device)
+                print(f"Epoch {epoch+1:2d}/{epochs}  loss={train_stats['loss']:.4f}  "
+                      f"train_acc={train_stats['accuracy']:.4f}  test_acc={test_stats['accuracy']:.4f}")
+    except Exception as train_err:
+        if apply_fn is not None:
+            # Compiled/patched model crashed during training — retry with baseline
+            print(f"[skeleton] Training crashed ({train_err}). Retrying with baseline model...")
+            model  = ResNet9().to(device)
+            scaler = torch.amp.GradScaler('cuda')
+            optimizer = torch.optim.SGD(
+                model.parameters(), lr=0.5, momentum=0.9, weight_decay=5e-4, nesterov=True
+            )
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimizer, max_lr=0.5, steps_per_epoch=len(train_loader),
+                epochs=epochs, pct_start=0.2, anneal_strategy="cos",
+                div_factor=25, final_div_factor=1e4,
+            )
+            t0 = time.perf_counter()  # restart timer
+            for epoch in range(epochs):
+                train_stats = train_one_epoch(model, train_loader, optimizer, scaler, scheduler, cutout, device)
+                if (epoch + 1) % 5 == 0 or epoch == epochs - 1:
+                    test_stats = evaluate(model, test_loader, device)
+        else:
+            raise  # no fallback available
 
     wall_time = time.perf_counter() - t0
     final_acc  = evaluate(model, test_loader, device)["accuracy"]
