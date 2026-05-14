@@ -27,23 +27,23 @@ SCHEMA_JSON = json.dumps({
 
 
 EXAMPLE_BINDING = '''
-# EXAMPLE 1 - torch.compile max-autotune (Triton installed, use this):
+# EXAMPLE 1 - cudagraphs (NO C compiler needed, works on Windows right now):
 def apply(model, config):
     import torch
     torch.set_float32_matmul_precision('high')
-    return torch.compile(model, mode="max-autotune")
+    return torch.compile(model, backend="cudagraphs")
 
-# EXAMPLE 2 - channels_last + max-autotune (best combo for conv-heavy ResNet):
+# EXAMPLE 2 - channels_last + cudagraphs (best combo, no compiler needed):
 def apply(model, config):
     import torch
     torch.set_float32_matmul_precision('high')
     model = model.to(memory_format=torch.channels_last)
-    return torch.compile(model, mode="max-autotune")
+    return torch.compile(model, backend="cudagraphs")
 
-# EXAMPLE 3 - reduce-overhead (faster first-epoch, less optimal steady-state):
+# EXAMPLE 3 - channels_last only (zero compilation, pure memory layout win):
 def apply(model, config):
     import torch
-    return torch.compile(model, mode="reduce-overhead")
+    return model.to(memory_format=torch.channels_last)
 '''
 
 
@@ -85,13 +85,12 @@ It is called before training starts. The model is already on CUDA.
 ## OUTPUT FORMAT — ONLY valid JSON, start with {{, end with }}
 {SCHEMA_JSON}
 
-## OPTIMIZATION STRATEGY (priority order)
-1. `torch.compile(model, mode='max-autotune')` — XLA-style kernel fusion, free speedup
-2. `model.to(memory_format=torch.channels_last)` — NCHW->NHWC, better conv perf
-3. Combine both: channels_last + compile
-4. Use `torch.backends.cudnn.benchmark = True` in apply()
-5. Reduce epochs in config while keeping accuracy (less wall time)
-6. Triton kernels via `import triton` (works without cl.exe)
+## OPTIMIZATION STRATEGY (priority order — cudagraphs works NOW, no C compiler needed)
+1. `torch.compile(model, backend='cudagraphs')` — captures the CUDA graph, eliminates kernel launch overhead, NO C compiler needed
+2. `model.to(memory_format=torch.channels_last)` — NCHW→NHWC layout, better conv throughput, zero compilation
+3. Combine channels_last + cudagraphs — best immediate win
+4. `torch.set_float32_matmul_precision('high')` — free TF32 speedup on Ada Lovelace
+5. mode='max-autotune' needs gcc/cl.exe — skip unless you know C compiler is available
 
 ## RULES
 - pytorch_binding MUST define `apply(model, config)` returning the model
