@@ -16,38 +16,38 @@ from cifar10.firewall import validate
 
 
 SCHEMA_JSON = json.dumps({
-    "kernel_type":          "compile_fusion | hyp_tuning | arch_change | data_pipeline",
-    "layer_target":         "SpeedyConvNet or conv_group_1/2/3 or linear (max 50 chars)",
-    "cuda_kernel_code":     "// leave as comment if not writing raw CUDA C++",
-    "pytorch_binding":      "def apply(net, hyp):\n    import torch\n    net = torch.compile(net, mode='max-autotune')\n    return net, hyp",
-    "integration_patch":    "net, hyp = apply(net, hyp)",
-    "rationale":            "Why this reduces wall time below 10s (max 1000 chars)",
+    "kernel_type":          "beam_search | hyp_tuning | wino_fusion | step_reduction | arch_change",
+    "layer_target":         "SpeedyResNet or ConvGroup or whitening or all (max 50 chars)",
+    "cuda_kernel_code":     "// tinygrad handles GPU kernels via UOp graph. Leave as comment.",
+    "pytorch_binding":      "def apply(hyp, env):\n    env['BEAM'] = '4'\n    env['BS'] = '1024'\n    return hyp, env",
+    "integration_patch":    "hyp, env = apply(hyp, env)",
+    "rationale":            "Why this tinygrad optimization reduces wall time toward <1s (max 1000 chars)",
     "expected_speedup_pct": 25,
 }, indent=2)
 
 
 EXAMPLE_BINDING = '''
-# EXAMPLE 1 - torch.compile max-autotune (gcc available in WSL2, this works):
-def apply(net, hyp):
-    import torch
-    torch.set_float32_matmul_precision('high')
-    net = torch.compile(net, mode='max-autotune')
-    return net, hyp
+# EXAMPLE 1 - BEAM kernel search (finds optimal GPU kernels, trades search time for faster training):
+def apply(hyp, env):
+    env['BEAM'] = '4'       # search 4 kernel candidates per op
+    env['WINO'] = '1'       # enable Winograd convolutions
+    return hyp, env
 
-# EXAMPLE 2 - compile + larger batch (fill tensor cores better):
-def apply(net, hyp):
-    import torch
-    torch.set_float32_matmul_precision('high')
-    hyp['opt']['non_bias_lr'] *= 2.0   # scale LR with batch
+# EXAMPLE 2 - fewer steps with larger batch to hit accuracy in less wall time:
+def apply(hyp, env):
+    env['BS']    = '2048'   # larger batch saturates tensor cores
+    env['STEPS'] = '600'    # fewer steps, LR must compensate
+    hyp['opt']['non_bias_lr'] *= 2.0
     hyp['opt']['bias_lr']     *= 2.0
-    net = torch.compile(net, mode='reduce-overhead')
-    return net, hyp
+    return hyp, env
 
-# EXAMPLE 3 - cudagraphs (fastest kernel launch, lowest latency):
-def apply(net, hyp):
-    import torch
-    net = torch.compile(net, backend='cudagraphs')
-    return net, hyp
+# EXAMPLE 3 - aggressive: max BEAM + Winograd + EMA off (save EMA compute):
+def apply(hyp, env):
+    env['BEAM']  = '8'
+    env['WINO']  = '1'
+    env['EMA']   = '0'      # skip EMA, use raw model for eval
+    env['STEPS'] = '800'
+    return hyp, env
 '''
 
 
@@ -57,38 +57,36 @@ def build_system_prompt(config: dict, skeleton_code: str, champion_info: str) ->
     target_acc = config.get("target_accuracy", 0.940)
 
     return f"""\
-You are the MOAB hlb-cifar10 Crucible optimization agent.
+You are the MOAB hlb-cifar10/tinygrad Crucible optimization agent.
 
 ## HARDWARE
 - GPU: RTX 4060 Mobile (Ada Lovelace, sm_89)
-- VRAM: 8 GB GDDR6, 272 GB/s bandwidth, 33 TFLOPS FP16
-- PyTorch 2.6 + Triton 3.2 + gcc (WSL2) — ALL compile modes available including max-autotune
+- VRAM: 8 GB, 272 GB/s bandwidth, 33 TFLOPS FP16
+- tinygrad installed with CUDA backend + kernel JIT
 
 ## MISSION
-Optimize hlb-cifar10 (SpeedyConvNet) training on CIFAR-10:
-- Target: >= {target_acc} accuracy AND < {target_t}s wall time
-- Baseline: ~20-25s on this GPU. You must cut it to < {target_t}s.
+Optimize tinygrad's hlb-cifar10 (SpeedyResNet) on CIFAR-10:
+- Target: >= {target_acc} accuracy AND < {target_t}s TOTAL wall time
+- The baseline runs 1000 steps. YOU must cut wall time to < {target_t}s.
 
 ## CURRENT STATUS
 {champion_info}
 
-## THE SKELETON YOU ARE OPTIMIZING
-The skeleton trains SpeedyConvNet (hlb-cifar10):
-- Data is ALREADY on GPU as FP16 tensors (no CPU DataLoader bottleneck)
-- Architecture: whitening conv → 3x ConvGroup (MaxPool+Conv+BN+GELU) → FastGlobalMaxPool → Linear
-- Channels_last already applied at model creation
-- EMA weights used for final accuracy measurement
-- OneCycleLR with SGD (separate bias/non-bias optimizers)
-- train_epochs=12.1, batchsize=1024
+## HOW TINYGRAD WORKS
+- tinygrad builds a lazy UOp graph. Kernels are compiled/fused at `.realize()` or step execution.
+- BEAM=N: searches N kernel candidates per op. Higher = better kernels, one-time search cost.
+- WINO=1: Winograd convolutions — faster 3x3 convs.
+- TinyJit captures the full training step as a single compiled graph after 2 warmup steps.
+- After warmup, each step runs the compiled graph: pure GPU, minimal Python overhead.
 
 ## YOUR BINDING CONTRACT
 Your `pytorch_binding` MUST define:
 ```python
-def apply(net, hyp):
-    # net = SpeedyConvNet (already on CUDA, FP16, channels_last)
-    # hyp = dict with keys: opt, net, misc
-    # Modify net and/or hyp to go faster
-    return net, hyp  # MUST return both
+def apply(hyp, env):
+    # hyp: dict with opt/net/ema sub-dicts (learning rates, steps, etc)
+    # env: dict with BEAM, WINO, BS, STEPS, EMA, CUDA, CUTMIX etc
+    # Return BOTH modified
+    return hyp, env
 ```
 
 ## WORKING EXAMPLES
@@ -97,20 +95,20 @@ def apply(net, hyp):
 ## OUTPUT FORMAT — ONLY valid JSON, start with {{, end with }}
 {SCHEMA_JSON}
 
-## OPTIMIZATION LEVERS (best ROI first)
-1. `torch.compile(net, mode='max-autotune')` — Triton kernel fusion, biggest speedup, gcc is available
-2. `torch.compile(net, mode='reduce-overhead')` — CUDA graph capture, low-latency per-step
-3. `torch.compile(net, backend='cudagraphs')` — alternative graph capture
-4. `torch.set_float32_matmul_precision('high')` — TF32 on Ada, free speedup
-5. Modify `hyp['misc']['train_epochs']` (e.g., 10.0) — fewer epochs if accuracy still holds
-6. Increase `batchsize` via `hyp` to saturate tensor cores (careful: LR must scale)
-7. `torch.backends.cudnn.benchmark = True` — auto-tune conv algorithms
+## OPTIMIZATION LEVERS (tinygrad-specific)
+1. env['BEAM'] = '4' or '8' — searches for optimal GPU kernels. One-time cost, permanent speedup.
+2. env['WINO'] = '1' — Winograd convolutions, faster 3x3 ops
+3. env['STEPS'] = '500' — fewer steps. Risk: lower accuracy unless LR is scaled up.
+4. env['BS'] = '2048' — larger batch fills tensor cores. Scale LR proportionally.
+5. env['EMA'] = '0' — skip EMA, use raw model weights for eval (saves ~5% compute)
+6. hyp['opt']['non_bias_lr'] / hyp['opt']['bias_lr'] — tune learning rate schedules
+7. hyp['net']['cutmix_steps'] — delay cutmix for faster early convergence
 
 ## RULES
-- apply() MUST return (net, hyp) tuple — not just net
-- Do NOT call `fuse_modules` (removed in PyTorch 2.x)
-- Do NOT import packages not in PyTorch standard library
-- cuda_kernel_code: set to `// not used` for Python-only optimizations
+- apply() MUST return (hyp, env) tuple
+- env values must be strings (they become os.environ)
+- Do NOT import torch — this is tinygrad, not PyTorch
+- cuda_kernel_code: always set to '// tinygrad handles kernels via UOp graph'
 - Output ONLY the JSON. No prose. No markdown fences.
 """
 
