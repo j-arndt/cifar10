@@ -2,28 +2,20 @@
 from __future__ import annotations
 
 import ast
-from enum import Enum
 from typing import Optional
 from dataclasses import dataclass
 
-from pydantic import BaseModel, Field, field_validator, model_validator
-
-
-class KernelType(str, Enum):
-    CONV_BN_RELU_FUSION = "conv_bn_relu_fusion"
-    DEPTHWISE_CONV       = "depthwise_conv"
-    OPTIMIZER_FUSION     = "optimizer_fusion"
-    DATA_PIPELINE        = "data_pipeline"
+from pydantic import BaseModel, Field, field_validator
 
 
 class KernelProposal(BaseModel):
-    kernel_type:          KernelType
-    layer_target:         str       = Field(..., max_length=50)
-    cuda_kernel_code:     str       = Field(..., min_length=10, max_length=65536)
-    pytorch_binding:      str       = Field(..., min_length=10, max_length=32768)
-    integration_patch:    str       = Field(..., min_length=5,  max_length=4096)
-    rationale:            str       = Field(..., max_length=1000)
-    expected_speedup_pct: int       = Field(..., ge=1, le=500)
+    kernel_type:          str  = Field(..., max_length=100)   # free string — metadata only
+    layer_target:         str  = Field(..., max_length=50)
+    cuda_kernel_code:     str  = Field(..., min_length=5, max_length=65536)
+    pytorch_binding:      str  = Field(..., min_length=10, max_length=32768)
+    integration_patch:    str  = Field(..., min_length=5,  max_length=4096)
+    rationale:            str  = Field(..., max_length=1000)
+    expected_speedup_pct: int  = Field(..., ge=1, le=500)
 
     @field_validator("pytorch_binding")
     @classmethod

@@ -185,15 +185,27 @@ class CifarAgent:
         return response["choices"][0]["message"]["content"]
 
     def parse_proposal(self, text: str) -> Optional[KernelProposal]:
-        """Extract and parse JSON from agent output."""
-        # Try to find outermost JSON object
+        """Extract and parse JSON from agent output. Raises ValueError with reason on failure."""
+        import json as _json
+
+        # With json_object mode the entire response IS the JSON — try it directly first
+        try:
+            return KernelProposal.model_validate_json(text)
+        except Exception as direct_err:
+            pass  # fall through to regex extraction
+
+        # Fallback: extract outermost {...} (handles models that add preamble text)
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
-            return None
+            raise ValueError(f"No JSON object found in output. First 200 chars: {text[:200]!r}")
+
+        json_str = match.group()
         try:
-            return KernelProposal.model_validate_json(match.group())
-        except Exception:
-            return None
+            KernelProposal.model_validate_json(json_str)
+        except Exception as e:
+            raise ValueError(f"Schema validation failed: {e}") from e
+
+        return KernelProposal.model_validate_json(json_str)
 
 
 if __name__ == "__main__":

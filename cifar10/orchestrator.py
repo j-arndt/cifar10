@@ -210,7 +210,26 @@ class OrchestrationLoop:
                 continue
 
             # ── Step 4: Extract JSON from raw LLM output ────────────
-            proposal_json = self.agent.parse_proposal(raw_proposal)
+            proposal_json = None
+            try:
+                proposal_json = self.agent.parse_proposal(raw_proposal)
+            except ValueError as parse_err:
+                reason = str(parse_err)[:400]
+                print(f"[orchestrator] Parse/schema error: {reason}")
+                record = AttemptRecord(
+                    attempt_id=f"jp{self._attempt_n:04d}",
+                    attempt_n=self._attempt_n,
+                    accuracy=0.0, wall_time_s=9999.0, passed=False,
+                    kernel_hash="", kernel_type="parse_fail",
+                    gate_failed="SCHEMA",
+                    error=reason,
+                    slap_received=slap[:500],
+                    timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                )
+                log_attempt(record)
+                self._slap_history.append(slap)
+                continue
+
             if proposal_json is None:
                 # Model didn't produce valid JSON — log snippet and slap with schema error
                 snippet = raw_proposal[:300].replace("\n", " ")
@@ -265,7 +284,7 @@ class OrchestrationLoop:
                     attempt_id=f"ce{self._attempt_n:04d}",
                     attempt_n=self._attempt_n,
                     accuracy=0.0, wall_time_s=9999.0, passed=False,
-                    kernel_hash="", kernel_type=fw_result.proposal.kernel_type.value,
+                    kernel_hash="", kernel_type=fw_result.proposal.kernel_type,
                     gate_failed=None, error=str(e)[:2000],
                     slap_received=slap[:500],
                     timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -291,7 +310,7 @@ class OrchestrationLoop:
                 wall_time_s=fitness_result.wall_time_s,
                 passed=fitness_result.passed,
                 kernel_hash=fitness_result.kernel_hash,
-                kernel_type=fw_result.proposal.kernel_type.value,
+                kernel_type=fw_result.proposal.kernel_type,
                 gate_failed=None,
                 error=fitness_result.error,
                 slap_received=slap[:500],

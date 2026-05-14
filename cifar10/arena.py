@@ -20,7 +20,7 @@ from typing import Optional
 
 import torch
 
-from cifar10.schemas import KernelProposal, KernelType
+from cifar10.schemas import KernelProposal
 
 
 class CompilationError(Exception):
@@ -35,7 +35,7 @@ class CompiledKernel:
     """Result of arena compilation — passed to fitness subprocess via binding_path."""
     binding_path: str          # path to .py file the subprocess will exec
     ptx_hash:     str          # SHA256 of binding code (identity for Python-only)
-    kernel_type:  KernelType
+    kernel_type:  str          # free string metadata
     build_dir:    str
     elapsed_s:    float
     cuda_compiled: bool = False  # True only if CUDA load_inline succeeded

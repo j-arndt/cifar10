@@ -9,7 +9,7 @@ from typing import Optional
 
 from pydantic import ValidationError
 
-from cifar10.schemas import KernelProposal, FirewallResult, KernelType
+from cifar10.schemas import KernelProposal, FirewallResult
 
 
 # --------------------------------------------------------------------------- #
