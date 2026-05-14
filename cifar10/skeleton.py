@@ -4,8 +4,11 @@ import time
 from pathlib import Path
 
 import torch
+import torch._dynamo
 import torch.nn as nn
 import yaml
+
+torch._dynamo.config.suppress_errors = True  # fall back to eager if compile fails
 
 from cifar10.data import get_cifar10_loaders, CutoutAugmentation
 from cifar10.network import ResNet9
@@ -62,9 +65,6 @@ def run_skeleton(config: dict | None = None, apply_fn=None) -> dict:
     # ── Apply agent's pytorch_binding (torch.compile, fused ops, etc.) ──
     if apply_fn is not None:
         try:
-            # Suppress Triton/dynamo errors — falls back to eager if compile fails
-            import torch._dynamo
-            torch._dynamo.config.suppress_errors = True
             model = apply_fn(model, config)
             print("[skeleton] pytorch_binding applied successfully")
         except Exception as e:
