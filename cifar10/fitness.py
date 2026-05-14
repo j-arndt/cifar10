@@ -68,12 +68,11 @@ def run_cifar(kernel_proposal=None, config: dict | None = None) -> FitnessResult
         binding_path = getattr(kernel_proposal, "binding_path", None)
         kernel_hash  = getattr(kernel_proposal, "ptx_hash", "unknown")
 
-    queue = mp.Queue()
-    proc  = mp.Process(
+    ctx   = mp.get_context("spawn")   # must be spawn — fork can't re-init CUDA
+    queue = ctx.Queue()
+    proc  = ctx.Process(
         target=_worker,
         args=(queue, binding_path, config),
-        # NOTE: daemon=False — torch.compile/Triton spawn child processes internally;
-        # daemon processes cannot have children. Cleanup handled by join+kill below.
     )
     proc.start()
     proc.join(timeout=600)  # 10-minute hard ceiling
