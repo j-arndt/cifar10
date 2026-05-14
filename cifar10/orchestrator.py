@@ -209,10 +209,37 @@ class OrchestrationLoop:
                     return None
                 continue
 
-            # ── Step 4: Firewall ────────────────────────────────────
-            fw_result = validate(raw_proposal)
+            # ── Step 4: Extract JSON from raw LLM output ────────────
+            proposal_json = self.agent.parse_proposal(raw_proposal)
+            if proposal_json is None:
+                # Model didn't produce valid JSON — log snippet and slap with schema error
+                snippet = raw_proposal[:300].replace("\n", " ")
+                print(f"[orchestrator] JSON parse failed. Raw output: {snippet!r}")
+                err_msg = (
+                    "Your output could not be parsed as JSON. "
+                    "You MUST output ONLY a JSON object starting with {{ and ending with }}. "
+                    "No prose, no markdown, no code fences. Raw output snippet:\n"
+                    + raw_proposal[:400]
+                )
+                record = AttemptRecord(
+                    attempt_id=f"jp{self._attempt_n:04d}",
+                    attempt_n=self._attempt_n,
+                    accuracy=0.0, wall_time_s=9999.0, passed=False,
+                    kernel_hash="", kernel_type="parse_fail",
+                    gate_failed="SCHEMA",
+                    error=err_msg[:2000],
+                    slap_received=slap[:500],
+                    timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                )
+                log_attempt(record)
+                self._slap_history.append(slap)
+                continue
+
+            # ── Step 5: Firewall (receives clean Pydantic model) ────
+            import json as _json
+            fw_result = validate(proposal_json.model_dump_json())
             if not fw_result.passed:
-                print(f"[orchestrator] Firewall blocked: gate={fw_result.gate_failed}")
+                print(f"[orchestrator] Firewall blocked: gate={fw_result.gate_failed} | {fw_result.error_message[:120]}")
                 record = AttemptRecord(
                     attempt_id=f"fw{self._attempt_n:04d}",
                     attempt_n=self._attempt_n,

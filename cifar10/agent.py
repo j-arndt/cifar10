@@ -165,7 +165,7 @@ class CifarAgent:
             ],
             temperature=0.7,
             max_tokens=4096,
-            stop=["```\n\n", "Human:", "User:"],
+            response_format={"type": "json_object"},  # grammar-constrained: always returns complete JSON
         )
         return response["choices"][0]["message"]["content"]
 
