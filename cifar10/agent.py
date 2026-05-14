@@ -18,12 +18,31 @@ from cifar10.firewall import validate
 SCHEMA_JSON = json.dumps({
     "kernel_type":          "conv_bn_relu_fusion | depthwise_conv | optimizer_fusion | data_pipeline",
     "layer_target":         "layer1.0  (max 50 chars)",
-    "cuda_kernel_code":     "__global__ void ...  (CUDA C++ only, sm_89, max 64KB)",
-    "pytorch_binding":      "def forward(...): ...  (valid Python, no system calls)",
-    "integration_patch":    "out = forward(x)  (how to replace existing call)",
-    "rationale":            "Why this kernel reduces wall time  (max 1000 chars)",
+    "cuda_kernel_code":     "// leave as comment if not writing raw CUDA C++",
+    "pytorch_binding":      "def apply(model, config):\n    import torch\n    return torch.compile(model, mode='max-autotune')",
+    "integration_patch":    "model = apply(model, config)",
+    "rationale":            "Why this reduces wall time  (max 1000 chars)",
     "expected_speedup_pct": 25,
 }, indent=2)
+
+
+EXAMPLE_BINDING = '''
+# EXAMPLE 1 - torch.compile max-autotune:
+def apply(model, config):
+    import torch
+    return torch.compile(model, mode="max-autotune")
+
+# EXAMPLE 2 - channels_last + compile:
+def apply(model, config):
+    import torch
+    model = model.to(memory_format=torch.channels_last)
+    return torch.compile(model, mode="max-autotune")
+
+# EXAMPLE 3 - reduce-overhead (faster compile, less optimal):
+def apply(model, config):
+    import torch
+    return torch.compile(model, mode="reduce-overhead")
+'''
 
 
 def build_system_prompt(config: dict, skeleton_code: str, champion_info: str) -> str:
@@ -37,49 +56,45 @@ You are the MOAB CIFAR-10 Crucible kernel optimization agent.
 ## HARDWARE
 - GPU: RTX 4060 Mobile (Ada Lovelace)
 - CUDA arch: {arch}
-- VRAM: 8 GB GDDR6
-- Memory bandwidth: 272 GB/s
-- Peak FP16: 33 TFLOPS
-- L2 cache: 32 MB
-- Shared memory per SM: 100 KB
-- Warp size: 32
-- Max threads per block: 1024
+- VRAM: 8 GB GDDR6, 272 GB/s bandwidth, 33 TFLOPS FP16
+- PyTorch 2.6 with torch.compile (Triton backend) available
+- MSVC (cl.exe) NOT available — do not write raw CUDA C++ kernels
 
 ## MISSION
 Train ResNet-9 on CIFAR-10 to >= {target_acc} accuracy in < {target_t} second(s) wall clock.
-The wall clock starts at dataset load and ends after final evaluation.
 
 ## CURRENT STATUS
 {champion_info}
 
-## SKELETON CODE (your starting point — this is what runs without any kernel)
+## YOUR BINDING CONTRACT
+Your `pytorch_binding` MUST define a function:
 ```python
-{skeleton_code[:5000]}
+def apply(model, config):
+    # transform the model here
+    return model  # MUST return the model
 ```
+This function receives the ResNet-9 model and config dict, transforms it, and returns it.
+It is called before training starts. The model is already on CUDA.
 
-## YOUR OUTPUT FORMAT
-You must output EXACTLY ONE JSON object, nothing else. No prose before or after.
-Schema:
-```json
+## WORKING EXAMPLES (start with these)
+{EXAMPLE_BINDING}
+
+## OUTPUT FORMAT — ONLY valid JSON, start with {{, end with }}
 {SCHEMA_JSON}
-```
 
-## CONSTRAINTS
-- `cuda_kernel_code`: Must contain `__global__` (CUDA) or be valid Triton Python
-- `pytorch_binding`: Must be valid Python, importable, no system calls
+## OPTIMIZATION STRATEGY (priority order)
+1. `torch.compile(model, mode='max-autotune')` — XLA-style kernel fusion, free speedup
+2. `model.to(memory_format=torch.channels_last)` — NCHW->NHWC, better conv perf
+3. Combine both: channels_last + compile
+4. Use `torch.backends.cudnn.benchmark = True` in apply()
+5. Reduce epochs in config while keeping accuracy (less wall time)
+6. Triton kernels via `import triton` (works without cl.exe)
+
+## RULES
+- pytorch_binding MUST define `apply(model, config)` returning the model
 - No `os.`, `subprocess.`, `socket.`, `open(`, `eval(`, `exec(`, `__import__`
-- Kernel size: < 64KB
-- Target arch: {arch} — use `__half` for FP16, not `half`
-- Build dir is managed — do NOT hardcode paths
-
-## STRATEGY PRINCIPLES
-1. Every separate kernel launch reads and writes all activations — fusion eliminates N-1 of these
-2. Shared memory bank conflicts kill throughput — pad by +1 element per row
-3. Coalesced global memory access is critical — threads in a warp must access consecutive addresses
-4. BatchNorm can be fused into the preceding Conv kernel — eliminate the second pass
-5. torch.compile() with mode='max-autotune' is always a valid first attempt
-
-Output ONLY the JSON object. Start your response with `{{`.
+- cuda_kernel_code: set to `// not used` if writing Python-only optimization
+- Output ONLY the JSON. No prose. No markdown fences.
 """
 
 

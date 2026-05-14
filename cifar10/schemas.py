@@ -37,8 +37,18 @@ class KernelProposal(BaseModel):
     @field_validator("cuda_kernel_code")
     @classmethod
     def must_have_global(cls, v: str) -> str:
-        if "__global__" not in v and "def " not in v:
-            raise ValueError("cuda_kernel_code must contain __global__ (CUDA) or def (Triton)")
+        # Allow: raw CUDA (__global__), Triton (def ), or comment-only / python-only
+        # cl.exe not available on this Windows host — CUDA C++ is optional
+        stripped = v.strip()
+        is_comment_only = all(
+            line.strip() == "" or line.strip().startswith("//") or line.strip().startswith("#")
+            for line in stripped.splitlines()
+        )
+        if not is_comment_only and "__global__" not in v and "def " not in v:
+            raise ValueError(
+                "cuda_kernel_code must contain __global__ (CUDA kernel), "
+                "def (Triton kernel), or be a comment (// not used)"
+            )
         return v
 
     model_config = {"str_strip_whitespace": True}

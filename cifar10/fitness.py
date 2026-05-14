@@ -2,7 +2,6 @@
 import hashlib
 import json
 import multiprocessing as mp
-import os
 import time
 import uuid
 from dataclasses import dataclass, asdict
@@ -24,25 +23,28 @@ class FitnessResult:
         return json.dumps(asdict(self), indent=2)
 
 
-def _worker(queue: mp.Queue, kernel_proposal, config: dict):
+def _worker(queue: mp.Queue, binding_path: Optional[str], config: dict):
     """Runs inside subprocess — full VRAM isolation from agent."""
     import time
     import torch
-    import yaml
-    from pathlib import Path
     from cifar10.skeleton import run_skeleton
 
     try:
         t0 = time.perf_counter()
 
-        if kernel_proposal is not None:
-            # Future: inject compiled kernel into training loop
-            # For now skeleton handles everything
-            pass
+        # Apply the pytorch_binding if provided
+        apply_fn = None
+        if binding_path and Path(binding_path).exists():
+            try:
+                ns: dict = {}
+                exec(compile(Path(binding_path).read_text(encoding="utf-8"), binding_path, "exec"), ns)
+                apply_fn = ns.get("apply")
+            except Exception as e:
+                queue.put({"accuracy": 0.0, "wall_time_s": 9999.0,
+                           "error": f"binding exec failed in subprocess: {e}"})
+                return
 
-        result = run_skeleton(config)
-        wall_time = time.perf_counter() - t0  # subprocess total time
-
+        result = run_skeleton(config, apply_fn=apply_fn)
         queue.put({
             "accuracy":    result["accuracy"],
             "wall_time_s": result["wall_time_s"],
@@ -58,12 +60,20 @@ def run_cifar(kernel_proposal=None, config: dict | None = None) -> FitnessResult
         config = yaml.safe_load(Path("config.yaml").read_text())
 
     attempt_id  = str(uuid.uuid4())[:8]
-    kernel_hash = hashlib.sha256(
-        str(kernel_proposal).encode() if kernel_proposal else b"skeleton"
-    ).hexdigest()[:16]
+
+    # Extract binding_path from CompiledKernel or None
+    binding_path = None
+    kernel_hash  = "skeleton"
+    if kernel_proposal is not None:
+        binding_path = getattr(kernel_proposal, "binding_path", None)
+        kernel_hash  = getattr(kernel_proposal, "ptx_hash", "unknown")
 
     queue = mp.Queue()
-    proc  = mp.Process(target=_worker, args=(queue, kernel_proposal, config), daemon=True)
+    proc  = mp.Process(
+        target=_worker,
+        args=(queue, binding_path, config),
+        daemon=True,
+    )
     proc.start()
     proc.join(timeout=600)  # 10-minute hard ceiling
 
@@ -104,7 +114,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.verify:
-        print("Running baseline fitness check...")
+        print("Running baseline fitness check (skeleton, no kernel)...")
         result = run_cifar()
         print(result.to_json())
-        print(f"\n{'PASS' if result.accuracy >= 0.90 else 'FAIL'}: accuracy={result.accuracy:.4f}  time={result.wall_time_s:.1f}s")
+        print(f"\n{'PASS' if result.accuracy >= 0.90 else 'FAIL'}: "
+              f"accuracy={result.accuracy:.4f}  time={result.wall_time_s:.1f}s")

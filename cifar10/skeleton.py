@@ -45,7 +45,7 @@ def evaluate(model, loader, device):
     return {"accuracy": correct / total}
 
 
-def run_skeleton(config: dict | None = None) -> dict:
+def run_skeleton(config: dict | None = None, apply_fn=None) -> dict:
     if config is None:
         config = yaml.safe_load(Path("config.yaml").read_text())
 
@@ -58,6 +58,14 @@ def run_skeleton(config: dict | None = None) -> dict:
     cutout = CutoutAugmentation(size=8)
 
     train_loader, test_loader = get_cifar10_loaders(batch_size=batch_size)
+
+    # ── Apply agent's pytorch_binding (torch.compile, fused ops, etc.) ──
+    if apply_fn is not None:
+        try:
+            model = apply_fn(model, config)
+            print("[skeleton] pytorch_binding applied successfully")
+        except Exception as e:
+            print(f"[skeleton] pytorch_binding apply failed (falling back to baseline): {e}")
 
     optimizer = torch.optim.SGD(
         model.parameters(), lr=0.5, momentum=0.9, weight_decay=5e-4, nesterov=True
