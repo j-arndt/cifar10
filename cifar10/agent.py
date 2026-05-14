@@ -93,6 +93,7 @@ class CifarAgent:
         """Locate GGUF model. Check common locations."""
         model_name = self.config.get("agent_model", "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf")
         search_dirs = [
+            Path("models"),                                     # ./models/ — PRIMARY
             Path("."),
             Path.home() / "models",
             Path.home() / ".cache" / "huggingface" / "hub",
@@ -103,11 +104,18 @@ class CifarAgent:
             candidate = d / model_name
             if candidate.exists():
                 return str(candidate)
-        # Return model name as-is — will fail at load time with a clear error
-        return model_name
+        # Return None — caller will fail fast with a clear error
+        return None
 
     def load(self) -> None:
         """Load LLM. Assert VRAM is mostly free first."""
+        if self._model_path is None:
+            model_name = self.config.get("agent_model", "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf")
+            raise FileNotFoundError(
+                f"Model not found: {model_name}\n"
+                f"Place the GGUF file in: {Path('models').absolute()}\\"
+            )
+
         if torch.cuda.is_available():
             reserved_gb = torch.cuda.memory_reserved() / 1e9
             if reserved_gb > 1.5:

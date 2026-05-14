@@ -47,7 +47,7 @@ class OrchestrationLoop:
             signal.signal(signal.SIGTERM, self._handle_shutdown)
 
     def _handle_shutdown(self, signum, frame):
-        print("\n[orchestrator] Shutdown signal received. Saving state and exiting...")
+        # NOTE: no print() here — stdout may be mid-write (reentrant crash on Windows)
         self._shutdown = True
 
     def _reload_config(self) -> None:
@@ -171,6 +171,11 @@ class OrchestrationLoop:
             self._attempt_n += 1
             cycle_start = time.time()
 
+            # ── Dry-run exit check (all cycles, not just successful) ─
+            if dry_run and self._attempt_n > dry_run_cycles:
+                print(f"\n[dry-run] {dry_run_cycles} cycles complete. System validated.")
+                return None
+
             print(f"\n[attempt {self._attempt_n}] {datetime.datetime.now().strftime('%H:%M:%S')} | "
                   f"elapsed: {elapsed_h:.1f}h | {self._champion_info()}")
 
@@ -199,6 +204,9 @@ class OrchestrationLoop:
 
             if raw_proposal is None:
                 print("[orchestrator] No proposal generated. Skipping cycle.")
+                if dry_run and self._attempt_n >= dry_run_cycles:
+                    print(f"\n[dry-run] {dry_run_cycles} cycles attempted (model missing or error).")
+                    return None
                 continue
 
             # ── Step 4: Firewall ────────────────────────────────────
