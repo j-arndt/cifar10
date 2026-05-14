@@ -1,0 +1,10 @@
+target_accuracy: 0.940
+target_wall_time_s: 1.0
+agent_model: "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
+agent_context_tokens: 8192
+compress_threshold_tokens: 6000
+batch_size: 512
+epochs: 30
+max_hours: 4
+rem_trigger_every_n_wins: 10
+cuda_arch: "sm_89"
